@@ -1,0 +1,21 @@
+{
+  "name": "sms-scam-shield-frontend",
+  "version": "1.0.0",
+  "description": "Frontend UI for SMS Scam Shield",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "autoprefixer": "^10.7.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.78.0",
+    "next": "^14.2.35",
+    "postcss": "^8.5.33",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.19"
+  }
+}

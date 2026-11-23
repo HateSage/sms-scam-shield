@@ -1,11 +1,20 @@
 """FastAPI service: POST a message, get a scam risk score with reasons."""
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.model import analyze, get_model
 
 app = FastAPI(title="SMS Scam Shield", version="1.0.0",
               description="Detects scam and fraud SMS messages and explains the red flags.")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class Message(BaseModel):

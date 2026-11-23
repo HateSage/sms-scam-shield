@@ -36,12 +36,21 @@ SMS text ──► Regex red-flag rules ─────────────�
 - **Rule layer** turns the model's score into reasons a person can act on, and escalates messages that ask for a PIN or OTP *and* include a link.
 
 ## Quick start
+
+### 1. Backend (FastAPI)
 ```bash
 git clone https://github.com/HateSage/sms-scam-shield.git
 cd sms-scam-shield
 pip install -r requirements.txt
 python scripts/train.py            # trains and prints metrics
 uvicorn app.main:app --reload      # API at http://localhost:8000/docs
+```
+
+### 2. Frontend (Next.js & React)
+```bash
+cd frontend
+npm install
+npm run dev                        # UI at http://localhost:3000
 ```
 
 Check a message from the terminal:
@@ -76,12 +85,15 @@ Also available: `POST /analyze/batch` (up to 100 messages) and `GET /health`.
 ```
 sms-scam-shield/
 ├── app/
-│   ├── main.py        # FastAPI routes
+│   ├── main.py        # FastAPI routes & CORS
 │   ├── model.py       # training, evaluation, inference
 │   └── red_flags.py   # explainable rule layer
 ├── data/              # UCI dataset + Nigerian scam samples
+├── frontend/          # Next.js & React UI (Tailwind CSS, Lucide)
+│   ├── src/app/       # Pages & API proxy routes
+│   └── src/lib/       # Heuristic engine & rules
 ├── scripts/           # train.py, check.py
-├── tests/             # pytest API + rules tests
+├── test/              # pytest API + rules tests
 ├── Dockerfile
 └── requirements.txt
 ```

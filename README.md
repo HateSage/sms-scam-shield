@@ -13,17 +13,20 @@ Fake "your BVN is blocked" texts, bogus promo prize notifications, crypto double
 **SMS Scam Shield** combines a machine learning classification pipeline with deterministic heuristic rules to deliver an interpretable threat assessment:
 - 📊 **Scam Probability:** Statistical risk score (0% – 100%) from a balanced Logistic Regression model.
 - 🚦 **Risk Classification:** Categorized as **High Risk**, **Suspicious / Medium Risk**, or **Likely Safe**.
+- 🤖 **Gemini AI Assessment:** Deep neural evaluation of social engineering tactics, targeted entities, and manipulation techniques.
 - 🚩 **Plain-English Red Flags:** Identifies specific indicators (credential theft, shortened links, BVN/NIN harvesting, artificial urgency, etc.).
-- 🛡️ **Actionable Advice:** Immediate, contextual safety instructions on what to do next.
+- 🛡️ **Actionable Advice:** Immediate, contextual safety instructions and safe response drafts on what to do next.
 
 ---
 
 ## ✨ Features
 
+- **Google Gemini LLM Integration:** Automated cognitive assessment explaining the *why* behind scams, flagging psychological manipulation techniques (fear, urgency, greed), identifying impersonated entities, and providing concrete defense steps.
 - **Interactive Next.js Dashboard:** Built with Next.js 14 (App Router), React 18, Tailwind CSS, and Lucide Icons.
+- **In-App Gemini Key Configuration:** Easily configure and save your Google Gemini API key directly in the dashboard UI (saved in secure local storage).
 - **Real-Time SMS Inspector:** Single-message tester with live character counter, preloaded real-world scam/safe presets, and a dynamic threat meter.
 - **Batch Scanner:** Inspect dozens of messages simultaneously with summary metrics (scam detection rate, flagged counts, safe counts) and risk filters.
-- **Browser LocalStorage History:** All analyzed messages and drafts are automatically saved to your browser so your history persists across reloads.
+- **Browser LocalStorage History:** All analyzed messages, AI assessments, and drafts are automatically saved to your browser so your history persists across reloads.
   - Search and filter saved messages by keyword or risk tier.
   - Export logs directly as **JSON** or **CSV**.
   - One-click re-inspection in the main analyzer.

@@ -28,10 +28,17 @@ import {
   FileCode,
   HardDrive,
   Filter,
+  Bot,
+  Key,
+  X,
+  Target,
+  BrainCircuit,
+  MessageSquareReply,
 } from "lucide-react";
 
 const STORAGE_KEY = "sms_scam_shield_history";
 const DRAFT_KEY = "sms_scam_shield_draft";
+const GEMINI_KEY_STORAGE = "sms_scam_shield_gemini_key";
 
 const PRESET_SAMPLES = [
   {
@@ -127,6 +134,12 @@ export default function Home() {
   const [historySearch, setHistorySearch] = useState("");
   const [historyFilter, setHistoryFilter] = useState("all");
 
+  // Gemini API Key state & modal
+  const [geminiKey, setGeminiKey] = useState("");
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const [tempKeyInput, setTempKeyInput] = useState("");
+  const [keySavedMessage, setKeySavedMessage] = useState(false);
+
   // Batch analysis states
   const [batchInput, setBatchInput] = useState(
     PRESET_SAMPLES.map((s) => s.text).join("\n\n---\n\n")
@@ -142,7 +155,6 @@ export default function Home() {
   useEffect(() => {
     checkHealth();
 
-    // Hydrate saved messages from localStorage
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
@@ -152,15 +164,39 @@ export default function Home() {
         }
       }
 
-      // Restore unsent message draft if available
       const savedDraft = localStorage.getItem(DRAFT_KEY);
       if (savedDraft) {
         setInputText(savedDraft);
+      }
+
+      const savedKey = localStorage.getItem(GEMINI_KEY_STORAGE);
+      if (savedKey) {
+        setGeminiKey(savedKey);
+        setTempKeyInput(savedKey);
       }
     } catch (e) {
       console.warn("Failed to read from localStorage", e);
     }
   }, []);
+
+  const handleSaveKey = () => {
+    const trimmed = tempKeyInput.trim();
+    setGeminiKey(trimmed);
+    try {
+      if (trimmed) {
+        localStorage.setItem(GEMINI_KEY_STORAGE, trimmed);
+      } else {
+        localStorage.removeItem(GEMINI_KEY_STORAGE);
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+    setKeySavedMessage(true);
+    setTimeout(() => {
+      setKeySavedMessage(false);
+      setShowKeyModal(false);
+    }, 1200);
+  };
 
   // 2. Auto-save input draft to localStorage
   const handleInputChange = (text) => {
@@ -176,7 +212,6 @@ export default function Home() {
     }
   };
 
-  // Helper to update history in state and localStorage
   const updateStorage = (updatedHistory) => {
     setHistory(updatedHistory);
     try {
@@ -211,13 +246,15 @@ export default function Home() {
   };
 
   const exportCSV = () => {
-    const headers = ["Timestamp", "Risk", "Scam Probability", "Is Scam", "Red Flags", "Text"];
+    const headers = ["Timestamp", "Risk", "Scam Probability", "Is Scam", "Red Flags", "Threat Category", "Impersonated Entity", "Text"];
     const rows = history.map((h) => [
       `"${h.timestamp || ""}"`,
       `"${h.result?.risk || ""}"`,
       `"${((h.result?.scam_probability || 0) * 100).toFixed(1)}%"`,
       `"${h.result?.is_scam ? "YES" : "NO"}"`,
       `"${(h.result?.red_flags || []).join("; ")}"`,
+      `"${h.result?.llm_assessment?.threat_category || ""}"`,
+      `"${h.result?.llm_assessment?.impersonated_entity || ""}"`,
       `"${(h.text || "").replace(/"/g, '""')}"`,
     ]);
     const csvContent = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
@@ -249,8 +286,14 @@ export default function Home() {
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(geminiKey ? { "x-gemini-key": geminiKey } : {}),
+        },
+        body: JSON.stringify({
+          text,
+          apiKey: geminiKey || undefined,
+        }),
       });
       const data = await response.json();
       setResult(data);
@@ -267,11 +310,9 @@ export default function Home() {
         }),
       };
 
-      // Persist in state & localStorage (keep last 50 entries)
       const updated = [newItem, ...history.filter((h) => h.text !== text)].slice(0, 50);
       updateStorage(updated);
 
-      // Clear draft once successfully analyzed
       try {
         localStorage.removeItem(DRAFT_KEY);
       } catch (err) {
@@ -296,14 +337,20 @@ export default function Home() {
     try {
       const response = await fetch("/api/batch", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(geminiKey ? { "x-gemini-key": geminiKey } : {}),
+        },
+        body: JSON.stringify({
+          messages,
+          include_llm: true,
+          apiKey: geminiKey || undefined,
+        }),
       });
       const data = await response.json();
       const results = data.results || [];
       setBatchResults(results);
 
-      // Save batch results to localStorage history
       const nowStr = new Date().toLocaleString([], {
         month: "short",
         day: "numeric",
@@ -318,7 +365,6 @@ export default function Home() {
         timestamp: nowStr,
       }));
 
-      // Combine with existing history, avoiding exact duplicates
       const existingTexts = new Set(history.map((h) => h.text));
       const freshItems = batchItems.filter((b) => !existingTexts.has(b.text));
       const combined = [...freshItems, ...history].slice(0, 50);
@@ -352,7 +398,13 @@ export default function Home() {
       item.text.toLowerCase().includes(historySearch.toLowerCase()) ||
       (item.result?.red_flags || []).some((f) =>
         f.toLowerCase().includes(historySearch.toLowerCase())
-      );
+      ) ||
+      (item.result?.llm_assessment?.threat_category || "")
+        .toLowerCase()
+        .includes(historySearch.toLowerCase()) ||
+      (item.result?.llm_assessment?.impersonated_entity || "")
+        .toLowerCase()
+        .includes(historySearch.toLowerCase());
 
     if (!matchesSearch) return false;
     if (historyFilter === "all") return true;
@@ -375,15 +427,35 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 <span className="font-bold text-lg text-white tracking-tight">SMS Scam Shield</span>
                 <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                  v1.0
+                  AI + ML
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">AI & Heuristic Smishing Detection</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            {/* Status indicator */}
+          <div className="flex items-center gap-3">
+            {/* Gemini API Key status / button */}
+            <button
+              onClick={() => {
+                setTempKeyInput(geminiKey);
+                setShowKeyModal(true);
+              }}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition ${
+                geminiKey
+                  ? "bg-purple-500/10 text-purple-300 border-purple-500/30 hover:bg-purple-500/20"
+                  : "bg-slate-800/90 text-slate-400 border-slate-700 hover:text-slate-200 hover:border-slate-600"
+              }`}
+              title="Configure Google Gemini API Key"
+            >
+              <Bot className="h-3.5 w-3.5 text-purple-400" />
+              <span className="font-medium">
+                {geminiKey ? "Gemini Key Active" : "Set Gemini Key"}
+              </span>
+              <Sparkles className="h-3 w-3 text-amber-400" />
+            </button>
+
+            {/* Backend status indicator */}
             <div className="flex items-center gap-2 bg-slate-800/70 border border-slate-700/60 rounded-full px-3 py-1 text-xs">
               <span
                 className={`h-2 w-2 rounded-full ${
@@ -396,7 +468,7 @@ export default function Home() {
               />
               <span className="text-slate-300 font-medium hidden md:inline">
                 {backendStatus === "connected"
-                  ? "FastAPI ML Backend Live"
+                  ? "FastAPI ML Live"
                   : backendStatus === "standalone"
                   ? "Local Shield Mode"
                   : "Checking Backend..."}
@@ -421,6 +493,91 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      {/* GEMINI KEY MODAL */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-lg bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                  <Bot className="h-5 w-5" />
+                </div>
+                <h3 className="font-bold text-slate-100 text-sm">Google Gemini LLM Settings</h3>
+              </div>
+              <button
+                onClick={() => setShowKeyModal(false)}
+                className="text-slate-400 hover:text-slate-200 p-1 rounded-md"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              SMS Scam Shield uses **Google Gemini 1.5 Flash** for deep threat reasoning, identifying psychological manipulation tactics, and drafting safety advice.
+            </p>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <Key className="h-3.5 w-3.5 text-purple-400" />
+                Gemini API Key
+              </label>
+              <input
+                type="password"
+                value={tempKeyInput}
+                onChange={(e) => setTempKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+              />
+              <div className="flex justify-between items-center text-[11px] pt-1 text-slate-500">
+                <span>Stored securely in browser localStorage.</span>
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-purple-400 hover:text-purple-300 underline flex items-center gap-0.5"
+                >
+                  Get free key <ExternalLink className="h-2.5 w-2.5" />
+                </a>
+              </div>
+            </div>
+
+            {keySavedMessage && (
+              <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 flex items-center gap-1.5">
+                <Check className="h-4 w-4" /> API key updated successfully!
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              {geminiKey && (
+                <button
+                  onClick={() => {
+                    setTempKeyInput("");
+                    setGeminiKey("");
+                    localStorage.removeItem(GEMINI_KEY_STORAGE);
+                    setShowKeyModal(false);
+                  }}
+                  className="px-3 py-1.5 text-xs text-rose-400 hover:text-rose-300 mr-auto"
+                >
+                  Remove Key
+                </button>
+              )}
+              <button
+                onClick={() => setShowKeyModal(false)}
+                className="px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveKey}
+                className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs rounded-xl shadow-lg shadow-purple-600/25 transition"
+              >
+                Save & Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 space-y-6">
@@ -480,8 +637,8 @@ export default function Home() {
         {/* TAB 1: SINGLE SMS INSPECTOR */}
         {activeTab === "single" && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            {/* Left Column: Input and Presets (7 cols) */}
-            <div className="lg:col-span-7 space-y-6">
+            {/* Left Column: Input and Presets (6 cols) */}
+            <div className="lg:col-span-6 space-y-6">
               {/* Main Card */}
               <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
                 <div className="flex items-center justify-between">
@@ -519,8 +676,8 @@ export default function Home() {
 
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                   <div className="flex items-center gap-2 text-xs text-slate-400">
-                    <HardDrive className="h-3.5 w-3.5 text-blue-400" />
-                    <span>Auto-saved to Browser LocalStorage</span>
+                    <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+                    <span>Gemini AI + TF-IDF ML + Heuristics</span>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -545,7 +702,7 @@ export default function Home() {
                       {loading ? (
                         <>
                           <RefreshCw className="h-4 w-4 animate-spin" />
-                          Analyzing...
+                          Analyzing with AI...
                         </>
                       ) : (
                         <>
@@ -597,10 +754,67 @@ export default function Home() {
                   ))}
                 </div>
               </div>
+
+              {/* Recent Scan History Sidebar widget */}
+              {history.length > 0 && (
+                <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      <History className="h-3.5 w-3.5 text-blue-400" />
+                      <span>Recent Saved Messages</span>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab("history")}
+                      className="text-[11px] text-blue-400 hover:text-blue-300 font-medium"
+                    >
+                      View All ({history.length})
+                    </button>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {history.slice(0, 5).map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => {
+                          handleInputChange(item.text);
+                          setResult(item.result);
+                        }}
+                        className="cursor-pointer w-full text-left p-2.5 rounded-lg bg-slate-950/60 hover:bg-slate-800/60 border border-slate-800/60 transition flex items-center justify-between text-xs group"
+                      >
+                        <div className="truncate max-w-[210px] pr-2">
+                          <p className="text-slate-300 font-mono text-[11px] truncate">{item.text}</p>
+                          <span className="text-[10px] text-slate-500">{item.timestamp}</span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              item.result?.risk === "high"
+                                ? "text-rose-400 bg-rose-500/10 border border-rose-500/20"
+                                : item.result?.risk === "medium"
+                                ? "text-amber-400 bg-amber-500/10 border border-amber-500/20"
+                                : "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20"
+                            }`}
+                          >
+                            {((item.result?.scam_probability || 0) * 100).toFixed(0)}%
+                          </span>
+                          <button
+                            onClick={(e) => deleteHistoryItem(item.id, e)}
+                            title="Delete this message"
+                            className="text-slate-500 hover:text-rose-400 p-1 rounded transition opacity-60 group-hover:opacity-100"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Right Column: Analysis Results Card (5 cols) */}
-            <div className="lg:col-span-5 space-y-6">
+            {/* Right Column: Analysis Results Card (6 cols) */}
+            <div className="lg:col-span-6 space-y-6">
               {result ? (
                 <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
                   {/* Result Header Badge */}
@@ -651,7 +865,7 @@ export default function Home() {
                       <span>Risk Probability Meter</span>
                       <span>{(result.scam_probability * 100).toFixed(1)}%</span>
                     </div>
-                    <div className="h-3 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800 p-0.5">
+                    <div className="h-2.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800 p-0.5">
                       <div
                         className={`h-full rounded-full transition-all duration-700 ease-out ${
                           result.scam_probability >= 0.8
@@ -663,127 +877,145 @@ export default function Home() {
                         style={{ width: `${Math.max(5, result.scam_probability * 100)}%` }}
                       />
                     </div>
-                    <div className="flex justify-between text-[10px] text-slate-500">
-                      <span>0% (Safe)</span>
-                      <span>50% (Threshold)</span>
-                      <span>100% (Confirmed Fraud)</span>
-                    </div>
                   </div>
 
+                  {/* 🤖 GEMINI AI DEEP THREAT ASSESSMENT */}
+                  {result.llm_assessment && (
+                    <div className="bg-slate-950/90 border border-purple-500/30 rounded-xl p-4 space-y-4 shadow-lg shadow-purple-950/20">
+                      <div className="flex items-center justify-between border-b border-purple-500/20 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <Bot className="h-4 w-4 text-purple-400" />
+                          <span className="font-bold text-xs uppercase tracking-wider text-purple-300">
+                            Gemini AI Neural Assessment
+                          </span>
+                        </div>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/30 font-mono">
+                          {result.llm_assessment.engine || "Gemini 1.5"}
+                        </span>
+                      </div>
+
+                      {/* Impersonated Entity & Threat Category */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                          <span className="text-[10px] uppercase font-semibold text-slate-500 block">
+                            Impersonated Target
+                          </span>
+                          <span className="text-slate-200 font-medium">
+                            {result.llm_assessment.impersonated_entity || "None"}
+                          </span>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                          <span className="text-[10px] uppercase font-semibold text-slate-500 block">
+                            Threat Category
+                          </span>
+                          <span className="text-purple-300 font-medium">
+                            {result.llm_assessment.threat_category || "General"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Executive Summary */}
+                      <div className="text-xs text-slate-300 leading-relaxed bg-purple-950/20 border border-purple-900/40 p-3 rounded-lg">
+                        <p className="font-medium text-slate-200">{result.llm_assessment.summary}</p>
+                      </div>
+
+                      {/* Psychological Manipulation Tactics */}
+                      {result.llm_assessment.manipulation_tactics?.length > 0 && (
+                        <div className="space-y-1.5">
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 block">
+                            Social Engineering Tactics
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {result.llm_assessment.manipulation_tactics.map((tactic, tidx) => (
+                              <span
+                                key={tidx}
+                                className="text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/20 px-2 py-0.5 rounded-md flex items-center gap-1"
+                              >
+                                <BrainCircuit className="h-2.5 w-2.5 text-amber-400" />
+                                {tactic}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Recommended Steps */}
+                      {result.llm_assessment.recommended_actions?.length > 0 && (
+                        <div className="space-y-1.5">
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 block">
+                            Recommended Action Plan
+                          </span>
+                          <ul className="space-y-1 text-xs text-slate-300">
+                            {result.llm_assessment.recommended_actions.map((act, aidx) => (
+                              <li key={aidx} className="flex items-start gap-1.5">
+                                <ChevronRight className="h-3.5 w-3.5 text-purple-400 shrink-0 mt-0.5" />
+                                <span>{act}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Safe Action Guidance */}
+                      {result.llm_assessment.safe_reply_draft && (
+                        <div className="pt-2 border-t border-purple-500/20 flex items-start gap-2 text-xs">
+                          <MessageSquareReply className="h-4 w-4 text-purple-400 shrink-0 mt-0.5" />
+                          <div className="text-slate-300">
+                            <span className="font-semibold text-purple-300">Safe Response Guidance: </span>
+                            {result.llm_assessment.safe_reply_draft}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Red Flags List */}
-                  <div className="space-y-3">
+                  <div className="space-y-2.5">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-                        Detected Red Flags ({result.red_flags?.length || 0})
+                        Rule Red Flags ({result.red_flags?.length || 0})
                       </span>
                     </div>
 
                     {result.red_flags && result.red_flags.length > 0 ? (
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         {result.red_flags.map((flag, idx) => (
                           <div
                             key={idx}
-                            className="flex items-start gap-2.5 p-2.5 rounded-lg bg-rose-500/5 border border-rose-500/20 text-xs text-rose-200"
+                            className="flex items-start gap-2 p-2 rounded-lg bg-rose-500/5 border border-rose-500/20 text-xs text-rose-200"
                           >
-                            <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
-                            <div>
-                              <span className="font-semibold text-rose-300">{flag}</span>
-                            </div>
+                            <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0 mt-0.5" />
+                            <span className="font-semibold text-rose-300">{flag}</span>
                           </div>
                         ))}
                       </div>
                     ) : (
-                      <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-xs text-emerald-300 flex items-center gap-2">
+                      <div className="p-2.5 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-xs text-emerald-300 flex items-center gap-2">
                         <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                        No signature red flags identified in this message.
+                        No rule red flags identified.
                       </div>
                     )}
-                  </div>
-
-                  {/* Safety Advice */}
-                  <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800/80 space-y-2">
-                    <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
-                      <Info className="h-4 w-4 text-blue-400" /> Recommended Action
-                    </div>
-                    <p className="text-xs text-slate-300 leading-relaxed">{result.advice}</p>
                   </div>
 
                   {/* Engine Details Footer */}
                   <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-800/60">
                     <span className="flex items-center gap-1">
                       <Activity className="h-3 w-3" />
-                      Engine: {result.engine === "fastapi_ml" ? "FastAPI ML Pipeline" : "Shield Heuristic"}
+                      ML Engine: {result.engine === "fastapi_ml" ? "FastAPI ML Pipeline" : "Shield Heuristic"}
                     </span>
                     <span>is_scam: {result.is_scam ? "true" : "false"}</span>
                   </div>
                 </div>
               ) : (
-                <div className="bg-slate-900/40 border border-dashed border-slate-800 rounded-2xl p-8 text-center space-y-4">
+                <div className="bg-slate-900/40 border border-dashed border-slate-800 rounded-2xl p-12 text-center space-y-4">
                   <div className="h-12 w-12 rounded-full bg-slate-800/80 mx-auto flex items-center justify-center text-slate-400">
                     <Shield className="h-6 w-6" />
                   </div>
                   <div>
                     <h3 className="font-semibold text-slate-300 text-sm">No Message Analyzed Yet</h3>
                     <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
-                      Paste an SMS message on the left or select a quick-test sample to view scam probability and red flag analysis.
+                      Paste an SMS message on the left or select a quick-test sample to view scam probability and AI threat analysis.
                     </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Recent Scan History Sidebar widget */}
-              {history.length > 0 && (
-                <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                      <History className="h-3.5 w-3.5 text-blue-400" />
-                      <span>Recent Saved Messages</span>
-                    </div>
-                    <button
-                      onClick={() => setActiveTab("history")}
-                      className="text-[11px] text-blue-400 hover:text-blue-300 font-medium"
-                    >
-                      View All ({history.length})
-                    </button>
-                  </div>
-
-                  <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
-                    {history.slice(0, 6).map((item) => (
-                      <div
-                        key={item.id}
-                        onClick={() => {
-                          handleInputChange(item.text);
-                          setResult(item.result);
-                        }}
-                        className="cursor-pointer w-full text-left p-2.5 rounded-lg bg-slate-950/60 hover:bg-slate-800/60 border border-slate-800/60 transition flex items-center justify-between text-xs group"
-                      >
-                        <div className="truncate max-w-[210px] pr-2">
-                          <p className="text-slate-300 font-mono text-[11px] truncate">{item.text}</p>
-                          <span className="text-[10px] text-slate-500">{item.timestamp}</span>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                              item.result?.risk === "high"
-                                ? "text-rose-400 bg-rose-500/10 border border-rose-500/20"
-                                : item.result?.risk === "medium"
-                                ? "text-amber-400 bg-amber-500/10 border border-amber-500/20"
-                                : "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20"
-                            }`}
-                          >
-                            {((item.result?.scam_probability || 0) * 100).toFixed(0)}%
-                          </span>
-                          <button
-                            onClick={(e) => deleteHistoryItem(item.id, e)}
-                            title="Delete this message from local storage"
-                            className="text-slate-500 hover:text-rose-400 p-1 rounded transition opacity-60 group-hover:opacity-100"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
                   </div>
                 </div>
               )}
@@ -802,7 +1034,7 @@ export default function Home() {
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
                   Inspect multiple SMS messages at once. Separate messages with triple dashes (`---`) or blank lines.
-                  Results are automatically saved to your local storage.
+                  Results and AI assessments are automatically saved to your local storage.
                 </p>
               </div>
 
@@ -830,7 +1062,7 @@ export default function Home() {
                   {batchLoading ? (
                     <>
                       <RefreshCw className="h-4 w-4 animate-spin" />
-                      Scanning Batch...
+                      Scanning Batch with AI...
                     </>
                   ) : (
                     <>
@@ -897,7 +1129,7 @@ export default function Home() {
                       className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4"
                     >
                       <div className="space-y-1.5 flex-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span
                             className={`px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${
                               item.risk === "high"
@@ -909,24 +1141,17 @@ export default function Home() {
                           >
                             {item.risk} Risk ({(item.scam_probability * 100).toFixed(0)}%)
                           </span>
-                          {item.red_flags?.length > 0 && (
-                            <span className="text-[11px] text-slate-500">
-                              {item.red_flags.length} red flag{item.red_flags.length > 1 ? "s" : ""}
+                          {item.llm_assessment?.threat_category && (
+                            <span className="text-[10px] bg-purple-500/10 text-purple-300 border border-purple-500/20 px-2 py-0.5 rounded">
+                              {item.llm_assessment.threat_category}
                             </span>
                           )}
                         </div>
                         <p className="text-xs text-slate-200 font-mono">{item.text}</p>
-                        {item.red_flags?.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5 pt-1">
-                            {item.red_flags.map((flag, fi) => (
-                              <span
-                                key={fi}
-                                className="text-[10px] bg-rose-500/10 text-rose-300 border border-rose-500/20 px-2 py-0.5 rounded"
-                              >
-                                {flag}
-                              </span>
-                            ))}
-                          </div>
+                        {item.llm_assessment?.summary && (
+                          <p className="text-[11px] text-slate-400 italic">
+                            {item.llm_assessment.summary}
+                          </p>
                         )}
                       </div>
 
@@ -1001,7 +1226,7 @@ export default function Home() {
                     type="text"
                     value={historySearch}
                     onChange={(e) => setHistorySearch(e.target.value)}
-                    placeholder="Search saved messages or red flags..."
+                    placeholder="Search messages, red flags, or threat categories..."
                     className="w-full bg-slate-950/80 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                   {historySearch && (
@@ -1076,6 +1301,11 @@ export default function Home() {
                         >
                           {item.result?.risk || "Unknown"} Risk ({((item.result?.scam_probability || 0) * 100).toFixed(0)}%)
                         </span>
+                        {item.result?.llm_assessment?.threat_category && (
+                          <span className="text-[10px] bg-purple-500/10 text-purple-300 border border-purple-500/20 px-2 py-0.5 rounded">
+                            {item.result.llm_assessment.threat_category}
+                          </span>
+                        )}
                         <span className="text-xs text-slate-500">{item.timestamp}</span>
                       </div>
 
@@ -1116,18 +1346,11 @@ export default function Home() {
                       {item.text}
                     </div>
 
-                    {item.result?.red_flags && item.result.red_flags.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        {item.result.red_flags.map((flag, fi) => (
-                          <span
-                            key={fi}
-                            className="text-[10px] bg-rose-500/10 text-rose-300 border border-rose-500/20 px-2 py-0.5 rounded flex items-center gap-1"
-                          >
-                            <AlertTriangle className="h-2.5 w-2.5 text-rose-400" />
-                            {flag}
-                          </span>
-                        ))}
-                      </div>
+                    {item.result?.llm_assessment?.summary && (
+                      <p className="text-xs text-slate-400 bg-slate-950/40 p-2.5 rounded-lg border border-slate-800/60">
+                        <span className="text-purple-400 font-semibold">AI Assessment: </span>
+                        {item.result.llm_assessment.summary}
+                      </p>
                     )}
                   </div>
                 ))}
@@ -1145,7 +1368,7 @@ export default function Home() {
                 SMS Threat Indicators & Red Flags Matrix
               </h2>
               <p className="text-xs text-slate-400 mt-1 max-w-2xl">
-                The classification engine pairs machine learning (Logistic Regression over TF-IDF n-grams) with deterministic heuristic red flag signatures.
+                The classification engine pairs machine learning (Logistic Regression over TF-IDF n-grams) with Google Gemini neural reasoning and deterministic heuristic red flag signatures.
               </p>
             </div>
 

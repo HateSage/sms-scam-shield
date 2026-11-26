@@ -34,6 +34,15 @@ def test_empty_rejected():
     assert client.post("/analyze", json={"text": ""}).status_code == 422
 
 
+def test_llm_assessment_present():
+    r = client.post("/analyze", json={"text": "URGENT your BVN is blocked. Click http://bit.ly/fix and send your PIN now", "include_llm": True})
+    assert r.status_code == 200
+    body = r.json()
+    assert "llm_assessment" in body
+    assert "threat_category" in body["llm_assessment"]
+    assert "manipulation_tactics" in body["llm_assessment"]
+
+
 def test_red_flags_rules():
     flags = find_red_flags("Send your OTP to claim your prize at www.win.xyz")
     assert {"Contains a link", "Asks for PIN, OTP or password", "Promises a prize or free money"} <= set(flags)
